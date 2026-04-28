@@ -45,40 +45,45 @@ const Index = () => {
     requestNotificationPermission().then(setNotifPerm);
   }, []);
 
-  // Alert detection — fires popup, voice, AND background notification
+  // Alert detection — popup + voice + notification ALWAYS fire together for the SAME patient
   useEffect(() => {
-    setPatients((prev) => {
-      let changed = false;
-      const next = prev.map((p) => {
-        const { remainingPct } = getRemaining(p, now);
-        const status = getStatus(remainingPct);
+    if (activeAlert) return; // wait until current alert is acknowledged
 
-        if (status === "critical" || status === "empty") {
-          if (p.acknowledged !== "critical") {
-            const msg = `Critical alert. Patient ${p.name} in room ${p.room} needs immediate attention.`;
-            if (!activeAlert) setActiveAlert({ patient: p, level: "critical" });
-            speak(msg);
-            notify("🚨 Critical IV Level", `${p.name} — Room ${p.room}: below 10%`, true);
-            toast.error(`Critical: ${p.name} (Room ${p.room})`);
-            changed = true;
-            return { ...p, acknowledged: "critical" as const };
-          }
-        } else if (status === "warning") {
-          if (p.acknowledged === "none") {
-            const msg = `Warning. Patient ${p.name} in room ${p.room} IV is running low.`;
-            if (!activeAlert) setActiveAlert({ patient: p, level: "warning" });
-            speak(msg);
-            notify("⚠️ IV Warning", `${p.name} — Room ${p.room}: below 20%`, false);
-            toast.warning(`Warning: ${p.name} (Room ${p.room})`);
-            changed = true;
-            return { ...p, acknowledged: "warning" as const };
-          }
+    // Find first un-acknowledged critical, then warning
+    let target: { patient: Patient; level: "warning" | "critical" } | null = null;
+    for (const p of patients) {
+      const status = getStatus(getRemaining(p, now).remainingPct);
+      if ((status === "critical" || status === "empty") && p.acknowledged !== "critical") {
+        target = { patient: p, level: "critical" };
+        break;
+      }
+    }
+    if (!target) {
+      for (const p of patients) {
+        const status = getStatus(getRemaining(p, now).remainingPct);
+        if (status === "warning" && p.acknowledged === "none") {
+          target = { patient: p, level: "warning" };
+          break;
         }
-        return p;
-      });
-      return changed ? next : prev;
-    });
-  }, [now, activeAlert]);
+      }
+    }
+    if (!target) return;
+
+    const { patient: p, level } = target;
+    if (level === "critical") {
+      speak(`Critical alert. Patient ${p.name} in room ${p.room} needs immediate attention.`);
+      notify("🚨 Critical IV Level", `${p.name} — Room ${p.room}: below 10%`, true);
+      toast.error(`Critical: ${p.name} (Room ${p.room})`);
+    } else {
+      speak(`Warning. Patient ${p.name} in room ${p.room} IV is running low.`);
+      notify("⚠️ IV Warning", `${p.name} — Room ${p.room}: below 20%`, false);
+      toast.warning(`Warning: ${p.name} (Room ${p.room})`);
+    }
+    setActiveAlert(target);
+    setPatients((prev) =>
+      prev.map((x) => (x.id === p.id ? { ...x, acknowledged: level } : x))
+    );
+  }, [now, activeAlert, patients]);
 
   const stats = useMemo(() => {
     let normal = 0, warning = 0, critical = 0;
